@@ -1,0 +1,21 @@
+[project]
+name = "sleeplabprocessing"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "yael-holosis",email = "yalon@holosishealth.com"}
+]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pandas = "^2.2.3"
+aws-manager = { git = "git@github.com:Holosis-Health/aws-manager.git", rev = "main" }
+holosissystem = { git = "git@github.com:Holosis-Health/HolosisSystem.git", rev = "ver0.1.5_motion_classifier" }
+mne = "^1.9.0"
+python-dotenv = "^1.0.0"
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
