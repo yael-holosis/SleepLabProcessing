@@ -1,0 +1,6 @@
+Entry
+Kitchen
+Livingroom
+Hallway
+Bedroom
+Bathroom

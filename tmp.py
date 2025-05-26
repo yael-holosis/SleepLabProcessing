@@ -1,145 +1,80 @@
-def calculate_awake_accuracy(df, awake_window, percentage_threshold):
-    # Create a copy of the dataframe to avoid SettingWithCopyWarning
-    df_copy = df.copy()
-    
-    # Calculate the threshold based on percentage of maximum value
-    # Apply the percentage threshold directly
-    threshold = percentage_threshold
-    
-    # Apply threshold to determine if signal is above threshold (1) or not (0)
-    df_copy['AboveThreshold'] = (df_copy['PercentageCount'] > threshold).astype(int)
-    
-    # Calculate awake index based on time window in minutes
-    awake_indices = []
-    
-    for idx, row in df_copy.iterrows():
-        current_time = row['StartTime']
-        # Define time window (current time +/- awake_window/2 minutes)
-        window_start = current_time - pd.Timedelta(minutes=awake_window/2)
-        window_end = current_time + pd.Timedelta(minutes=awake_window/2)
-        
-        # Get signals that fall within the time window
-        window_signals = df_copy[
-            (df_copy['StartTime'] >= window_start) & 
-            (df_copy['StartTime'] <= window_end)
-        ]
-        
-        # Calculate median of AboveThreshold values within the time window
-        if len(window_signals) > 0:
-            awake_index = window_signals['AboveThreshold'].median()
-            # If the median is 0.5, set it to 1
-            if awake_index == 0.5:
-                awake_index = 1
-        else:
-            awake_index = 0
-            
-        awake_indices.append(awake_index)
-    
-    df_copy['AwakeIndex'] = awake_indices
-    
-    # Calculate confusion matrix metrics using sklearn for a shorter implementation
-    from sklearn.metrics import confusion_matrix, accuracy_score
-    
-    # Filter out rows with NaN values in awake_gt
-    valid_data = df_copy.dropna(subset=['awake_gt'])
-    
-    if len(valid_data) > 0:
-        y_true = valid_data['awake_gt'].values
-        y_pred = valid_data['AwakeIndex'].values
-        
-        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-        accuracy = accuracy_score(y_true, y_pred)
-        
-        stats = {'Accuracy': accuracy, 'TP': tp, 'TN': tn, 'FP': fp, 'FN': fn}
-    else:
-        # Return empty stats if no valid data
-        stats = {'Accuracy': float('nan'), 'TP': 0, 'TN': 0, 'FP': 0, 'FN': 0}
-    return stats
-
-def calculate_awake_accuracy_ver2(df, awake_window, percentage_threshold, establish_baseline = True):
-    # Create a copy of the dataframe to avoid SettingWithCopyWarning
-    df_copy = df.copy()
-    
-    # Calculate the threshold based on percentage of maximum value
-    # Apply the percentage threshold directly
-    threshold = percentage_threshold
-    
-    # Calculate awake index based on time window in minutes
-    median_percentage = []
-    
-    for idx, row in df_copy.iterrows():
-        current_time = row['StartTime']
-        # Define time window (current time +/- awake_window/2 minutes)
-        window_start = current_time - pd.Timedelta(minutes=awake_window/2)
-        window_end = current_time + pd.Timedelta(minutes=awake_window/2)
-        
-        # Get signals that fall within the time window
-        window_signals = df_copy[
-            (df_copy['StartTime'] >= window_start) & 
-            (df_copy['StartTime'] <= window_end)
-        ]
-        
-        # Calculate median of AboveThreshold values within the time window
-        if len(window_signals) > 0:
-            awake_index = window_signals['PercentageCount'].median()
-        else:
-            awake_index = 0
-            
-        median_percentage.append(awake_index)
-    
-    
-    df_copy['MedianPercentage'] = median_percentage
-    
-    if establish_baseline:
-        # print(f"Median percentage: {median_percentage}")
-        print(f"Establishing baseline for {percentage_threshold} threshold")
-        percentage_threshold = min(median_percentage) + percentage_threshold
-        print(f"New threshold: {percentage_threshold}")
-        
-    df_copy['AwakeIndex'] = df_copy['MedianPercentage']>percentage_threshold
-    
-    # Calculate confusion matrix metrics using sklearn for a shorter implementation
-    from sklearn.metrics import confusion_matrix, accuracy_score
-    
-    # Filter out rows with NaN values in awake_gt
-    valid_data = df_copy.dropna(subset=['awake_gt'])
-    
-    if len(valid_data) > 0:
-        y_true = valid_data['awake_gt'].values
-        y_pred = valid_data['AwakeIndex'].values
-        
-        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-        accuracy = accuracy_score(y_true, y_pred)
-        
-        stats = {'Accuracy': accuracy, 'TP': tp, 'TN': tn, 'FP': fp, 'FN': fn}
-    else:
-        # Return empty stats if no valid data
-        stats = {'Accuracy': float('nan'), 'TP': 0, 'TN': 0, 'FP': 0, 'FN': 0}
-    return stats
-
-from tqdm import tqdm
-import pandas as pd
 import os
+import pandas as pd
+import numpy as np
+
+# Parameters
+window_size = 10  # Number of samples to look before and after each sample
+
+# Prepare data for linear regression
+X = []  # Motion percentages from window
+y = []  # Ground truth labels
+groups = [] # Group by patient 
 
 results_folder = 'awake_analysis'
-df_motion_with_gt = pd.read_csv(os.path.join(results_folder, 'motion_with_gt.csv'))
-df_motion_with_gt['StartTime'] = pd.to_datetime(df_motion_with_gt['StartTime'])
-window_times = range(2, 40, 2) 
-establish_baseline = True
-motion_percentage_thresholds = list(range(4, 30, 2))  
-num_configs = len(window_times) * len(motion_percentage_thresholds)
-df_results_per_session = pd.DataFrame(columns=['window_time', 'motion_percentage_th', 'session_id', 'accuracy', 'TP', 'TN', 'FP', 'FN'])
-df_results = pd.DataFrame(columns=['window_time', 'motion_percentage_th', 'accuracy', 'TP', 'TN', 'FP', 'FN'])
+df_motion_per_sample = pd.read_csv(os.path.join(results_folder, 'motion_per_sample_10_seconds.csv'))
 
-with tqdm(total=num_configs, desc="Processing configs") as pbar:
-    for window_time in window_times:
-        for motion_percentage_th in motion_percentage_thresholds:
-            config = {'window_time': window_time, 'motion_percentage_th': motion_percentage_th}
-            for session_id in df_motion_with_gt['SessionID'].unique():
-                df_session = df_motion_with_gt[df_motion_with_gt['SessionID'] == session_id].copy()
-                patient = df_session['PatientStudyName'].unique()[0]
-                stats = calculate_awake_accuracy_ver2(df_session, window_time, motion_percentage_th, establish_baseline)
-                results = {**config, 'session_id': session_id, 'patient': patient, **stats}
-                df_results_per_session = pd.concat([df_results_per_session, pd.DataFrame([results])], ignore_index=True)
-            pbar.update(1)
-            df_results_per_session.to_csv(os.path.join(results_folder, 'awake_accuracy_per_session.csv'), index=False)
+# Iterate through sessions
+for session_id in df_motion_per_sample['SessionID'].unique():
+    # Get motion data for this session
+    session_motion = df_motion_per_sample[df_motion_per_sample['SessionID'] == session_id].copy()
+    
+    # Skip if session has no data
+    if session_motion.empty:
+        continue
+        
+    patient_name = session_motion['PatientStudyName'].unique()[0]
+    session_date = session_motion['SessionDate'].unique()[0]
+    
+    session_folder = os.path.join('data', f"{patient_name}_{session_date}")
+    
+    # Skip if sleep stages file doesn't exist
+    if not os.path.exists(os.path.join(session_folder, 'sleep_stages.csv')):
+        continue
+        
+    sleep_stages_df = pd.read_csv(os.path.join(session_folder, 'sleep_stages.csv'))
+    sleep_stages_df['StartDateTime'] = pd.to_datetime(sleep_stages_df['StartDateTime'])
+    sleep_stages_df['EndDateTime'] = pd.to_datetime(sleep_stages_df['EndDateTime'])
+    
+    # For each sample in the session
+    for i in range(len(session_motion)):
+        # Get window indices
+        start_idx = max(0, i - window_size//2)
+        end_idx = min(len(session_motion), i + window_size//2 + 1)
+        
+        # Get motion percentages for window
+        window_percentages = session_motion['MotionPercentage'].iloc[start_idx:end_idx].values
+            
+        # Pad with zeros if window is smaller than expected
+        if len(window_percentages) < 2*window_size + 1:
+            # Calculate padding needed on each side
+            left_pad = max(0, window_size//2 - i)  # Pad at start if near beginning
+            right_pad = max(0, (i + window_size//2 + 1) - len(session_motion))  # Pad at end if near end
+            
+            # Pad the array on both sides as needed
+            window_percentages = np.pad(window_percentages, (left_pad, right_pad), 'constant')
+            
+        # Get sample start and end time
+        sample_start = pd.to_datetime(session_motion['StartTime'].iloc[i])
+        sample_end = pd.to_datetime(session_motion['EndTime'].iloc[i])
+        
+        # Find the sleep stage that contains the middle point of the sample
+        sample_midpoint = sample_start + (sample_end - sample_start) / 2
+        stage = sleep_stages_df[
+            (sleep_stages_df['StartDateTime'] <= sample_midpoint) & 
+            (sleep_stages_df['EndDateTime'] > sample_midpoint)
+        ]
+        
+        # Skip if no sleep stage found
+        if stage.empty:
+            gt = np.nan
+        else:
+            gt = 1 if stage['Stage'].iloc[0] == 'Awake' else 0
+            
+        
+        X.append(window_percentages)
+        y.append(gt)
+        groups.append(patient_name)
+
+df_motion_per_sample['GroundTruth'] = y
+X = np.array(X)
+y = np.array(y)
